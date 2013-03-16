@@ -8,8 +8,8 @@ linux_auto_overlay = {
 }
 
 
-class LinuxAuto(obj.Profile):
-    """An auto-discovery Profile for Linux ARM"""
+class AbstractLinuxAutoProfile(obj.Profile):
+    """An abstract auto-discovery profile for Linux."""
     _md_os = 'linux'
     _md_memory_model = '32bit'
     _md_auto = True
@@ -19,6 +19,11 @@ class LinuxAuto(obj.Profile):
 
     def get_symbol(self, sym_name):
         return None
+
+
+class LinuxAutoARM(AbstractLinuxAutoProfile):
+    """An auto-discovery profile for Linux ARM."""
+    _md_arch = 'ARM'
 
 
 class VolatilityLinuxAutoARMValidAS(obj.VolatilityMagic):
@@ -49,7 +54,7 @@ class LinuxAutoOverlay(obj.ProfileModification):
 
 
 class LinuxAutoObjectClasses(obj.ProfileModification):
-    """ Makes slight changes to the DTB checker """
+    """Makes slight changes to the DTB checker."""
     conditions = {'os': lambda x: x == 'linux',
                   'auto': lambda x: x}
     before = ['LinuxObjectClasses']
