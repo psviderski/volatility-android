@@ -63,11 +63,12 @@ class VolatilityDTBARM(obj.VolatilityMagic):
                           self.obj_vm.get_available_addresses()))
         # Address space size in megabytes
         as_size >>= 20
+        pgd_page = self.obj_vm.read(pgd_addr, ARM_PGD_SIZE)
         first_kernel_entry = ARM_PGD_ENTRIES / 4 * 3
-        first_kernel_entry_offset = pgd_addr + first_kernel_entry * ARM_PGD_ENTRY_SIZE
         valid_kernel_entries = 0
-        for addr in xrange(first_kernel_entry_offset, pgd_addr + ARM_PGD_SIZE, ARM_PGD_ENTRY_SIZE):
-            (pgd_entry, ) = unpack('<I', self.obj_vm.read(addr, ARM_PGD_ENTRY_SIZE))
+        for entry_num in xrange(first_kernel_entry, ARM_PGD_ENTRIES):
+            entry_offset = entry_num * ARM_PGD_ENTRY_SIZE
+            (pgd_entry, ) = unpack('<I', pgd_page[entry_offset:entry_offset + ARM_PGD_ENTRY_SIZE])
             if (pgd_entry & 0x7ff) == 0x40e:
                 valid_kernel_entries += 1
         valid_kernel_entries_ratio = 1.0 * valid_kernel_entries / min(as_size, 896)  # FIXME 896?
@@ -91,9 +92,6 @@ class VolatilityDTBARM(obj.VolatilityMagic):
                 if self._is_valid_pgd(addr):
                     debug.debug("Located a DTB at physical address {0:#x}".format(addr))
                     yield addr
-        else:
-            yield None
-
 
 class LinuxAutoOverlay(obj.ProfileModification):
     conditions = {'os': lambda x: x == 'linux'}
