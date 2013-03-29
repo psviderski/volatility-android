@@ -178,8 +178,16 @@ class ArmAddressSpace(intel.JKIA32PagedMemory):
             pde_value = self.pde_value(vaddr)
             if not self.entry_present(pde_value):
                 continue
-            if (pde_value & 0b11) == 0b01:
-                # 'pde_value' is a coarse page table descriptor.
+            # 'pde_value' is a 1MB section or a 16MB supersection descriptor
+            if (pde_value & 0b11) == 0b10:
+                is_supersection = bool(pde_value & (1 << 18))
+                if is_supersection:
+                    # TODO: Implement Supersection support if needed
+                    debug.warning("supersection found")
+                else:
+                    yield (vaddr, 0x100000)
+            # 'pde_value' is a coarse page table descriptor
+            elif (pde_value & 0b11) == 0b01:
                 # Coarse tables are 1KB in size. Each 32-bit entry provides
                 # translation information for 4KB of memory.
                 tmp = vaddr
@@ -190,12 +198,13 @@ class ArmAddressSpace(intel.JKIA32PagedMemory):
                         continue
                     if (pde2_value & 0b11) == 0b01:
                         # 64K large pages
-                        yield "UNHANDLED LARGE PAGE"
+                        debug.warning("large page found")
                     else:
                         # 4K small pages
                         yield (vaddr, 0x1000)
+            # 'pde_value' is a fine page table descriptor
             elif (pde_value & 0b11) == 0b11:
-                yield "UNHANDLED TINY PAGE"
+                debug.warning("fine page table found")
 
 
 
