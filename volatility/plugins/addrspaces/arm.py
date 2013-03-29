@@ -52,6 +52,11 @@ class ArmAddressSpace(intel.JKIA32PagedMemory):
             return True # TODO FIXME
         return False
 
+    def entry_present(self, entry):
+        if (entry & 0b11) != 0b00:
+            return True
+        return False
+
     # Page Directory Index (1st Level Index)
     def pde_index(self, vaddr):
         return (vaddr >> 20)
@@ -97,7 +102,7 @@ class ArmAddressSpace(intel.JKIA32PagedMemory):
                 debug.warning("supersection found")
                 return None
             else:
-                return ((pde_value & 0xFFE00000) | (vaddr & 0x1FFFFF))
+                return ((pde_value & 0xFFF00000) | (vaddr & 0xFFFFF))
   
         elif (pde_value & 0b11) == 0b01:
             # If bits[1:0] == 0b01, the entry gives the physical address of a coarse second-level table, that specifies
@@ -164,9 +169,33 @@ class ArmAddressSpace(intel.JKIA32PagedMemory):
     # this is supposed to return all valid physical addresses based on the current dtb
     # this (may?) be painful to write due to ARM's different page table types and having small & large pages inside of those
     def get_available_pages(self):
-
-        for i in xrange(0, (2 ** 32) - 1, 4096):
-            yield (i, 0x1000)
+        # First-level table ranges in size from 128 bytes to 16KB, depending on
+        # the value (N) in the TTBCR, where N = 0 to 7.
+        # In the Linux kernel first-level tables are 16KB in size.
+        # Each first-level and second-level descriptor is 4 bytes.
+        for pde in xrange(0x4000 / 4):
+            vaddr = pde << 20
+            pde_value = self.pde_value(vaddr)
+            if not self.entry_present(pde_value):
+                continue
+            if (pde_value & 0b11) == 0b01:
+                # 'pde_value' is a coarse page table descriptor.
+                # Coarse tables are 1KB in size. Each 32-bit entry provides
+                # translation information for 4KB of memory.
+                tmp = vaddr
+                for pde2 in xrange(0x400 / 4):
+                    vaddr = tmp | (pde2 << 12)
+                    pde2_value = self.pde2_value(vaddr, pde_value)
+                    if not self.entry_present(pde2_value):
+                        continue
+                    if (pde2_value & 0b11) == 0b01:
+                        # 64K large pages
+                        yield "UNHANDLED LARGE PAGE"
+                    else:
+                        # 4K small pages
+                        yield (vaddr, 0x1000)
+            elif (pde_value & 0b11) == 0b11:
+                yield "UNHANDLED TINY PAGE"
 
 
 

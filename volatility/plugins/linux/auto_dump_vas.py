@@ -16,18 +16,30 @@ class linux_auto_dump_vas(auto_dtblist.linux_auto_dtblist):
         process_dtb = self._config.PROC_DTB
         if not process_dtb:
             debug.error("Please specify the DTB address of a process (use option --proc-dtb).")
+        process_as = utils.load_as(self._config, dtb=process_dtb)
+        for vaddr, size in process_as.get_available_pages():
+            page = process_as.read(vaddr, size)
+            if page:
+                yield vaddr, page
+
+    def render_text(self, outfd, data):
         output_file = self._config.VAS_OUTPUT_FILE
         if not output_file:
             debug.error("Please specify the output file to write VAS to (use option --vas-output-file).")
-        process_as = utils.load_as(self._config, dtb=process_dtb)
-        buffer_size = 0x1000
-        with open(output_file, 'w') as output_fd:
-            for vaddr in xrange(0xc0000000, 0xffffffff, buffer_size):
-                buffer = process_as.read(vaddr, buffer_size)
-                output_fd.write(buffer)
-                yield vaddr
-
-    def render_text(self, outfd, data):
-        self.table_header(outfd, [("Dump vaddr", "[addrpad]")])
-        for vaddr in data:
-            self.table_row(outfd, vaddr)
+        self.table_header(outfd, [("Start", "[addrpad]"),
+                                  ("End", "[addrpad]")])
+        with open(output_file, 'wb') as output_fd:
+            vaddr_start = None
+            vaddr_end = None
+            for vaddr, page in data:
+                if vaddr == vaddr_end:
+                    vaddr_end += len(page)
+                else:
+                    if vaddr_start is not None:
+                        self.table_row(outfd, vaddr_start, vaddr_end)
+                    vaddr_start = vaddr
+                    vaddr_end = vaddr + len(page)
+                output_fd.write(page)
+            # Print the last range of virtual addresses
+            if vaddr_start is not None:
+                self.table_row(outfd, vaddr_start, vaddr_end)
