@@ -9,6 +9,10 @@ class linux_auto_dump_map(auto_dtblist.linux_auto_dtblist):
         super(linux_auto_dump_map, self).__init__(config, *args, **kwargs)
         self._config.add_option('PROC-DTB', type='int', default=None,
                                 help="Process DTB address")
+        self._config.add_option('VA-START', short_option='s', type='int', default = None,
+                                help = "Starting virtual address to dump")
+        self._config.add_option('VA-END', short_option='e', type='int', default = None,
+                                help = "Ending virtual address to dump")
         self._config.add_option('OUTPUTFILE', short_option='O', default=None,
                                 help="Output file to write a dump of virtual address space to")
         self._config.add_option('DUMP-DIR', short_option='D', default = None,
@@ -19,8 +23,21 @@ class linux_auto_dump_map(auto_dtblist.linux_auto_dtblist):
         if not process_dtb:
             debug.error("Please specify a DTB address of a process (use option --proc-dtb).")
         process_as = utils.load_as(self._config, dtb=process_dtb)
+        va_start = self._config.VA_START if self._config.VA_START is not None else 0
+        va_end = self._config.VA_END if self._config.VA_END is not None else (1 << 64)
         for vaddr, size in process_as.get_available_pages():
+            if vaddr + size <= va_start:
+                continue
+            if vaddr >= va_end:
+                break
             page = process_as.read(vaddr, size)
+            if vaddr + size > va_end:
+                cut_tail_offset = vaddr + size - va_end
+                page = page[:-cut_tail_offset]
+            if vaddr < va_start:
+                cut_head_offset = va_start - vaddr
+                page = page[cut_head_offset:]
+                vaddr += cut_head_offset
             if page:
                 yield vaddr, page
 
