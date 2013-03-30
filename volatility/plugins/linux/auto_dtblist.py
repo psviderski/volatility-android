@@ -13,8 +13,8 @@ class linux_auto_dtblist(linux_common.AbstractLinuxCommand):
 
     def calculate(self):
         phys_as = utils.load_as(self._config, astype='physical')
-        for pgd_addr in obj.VolMagic(phys_as).DTB.get_suggestions():
-            yield pgd_addr
+        for dtb in obj.VolMagic(phys_as).DTB.get_suggestions():
+            yield dtb
 
     def render_text(self, outfd, data):
         self.table_header(outfd, [("DTB", "[addrpad]")])
