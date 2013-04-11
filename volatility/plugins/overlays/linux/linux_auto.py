@@ -6,6 +6,8 @@ from struct import unpack
 ARM_PGD_SIZE = 0x4000  # 16 KB
 ARM_PGD_ENTRIES = 4096
 ARM_PGD_ENTRY_SIZE = 4
+# Entry offsets
+ARM_PGD_DOMAIN_OFFSET = 5
 
 linux_auto_overlay = {
     'VOLATILITY_MAGIC': [None, {
@@ -47,8 +49,8 @@ class VolatilityLinuxAutoARMValidAS(obj.VolatilityMagic):
 class VolatilityDTBARM(obj.VolatilityMagic):
     """A scanner for DTB values in an ARM image."""
 
-    def _is_valid_pgd(self, pgd_addr):
-        """Checks if PGD table starting at pgd_addr is valid.
+    def _is_valid_pgd_kernel_space(self, pgd_addr):
+        """Checks if kernel space entries in PGD table are valid.
 
         In case of 3G/1G User Space/Kernel Space mapping of virtual memory,
         the last quarter (entries 3072-4095) of a PGD table maintains Kernel's
@@ -69,14 +71,45 @@ class VolatilityDTBARM(obj.VolatilityMagic):
         for entry_num in xrange(first_kernel_entry, ARM_PGD_ENTRIES):
             entry_offset = entry_num * ARM_PGD_ENTRY_SIZE
             (pgd_entry, ) = unpack('<I', pgd_page[entry_offset:entry_offset + ARM_PGD_ENTRY_SIZE])
-            if (pgd_entry & 0x7ff) == 0x40e:
+            #if (pgd_entry & 0xfff) == 0b010001001110:  # TODO domain 0
+            if (pgd_entry & 0b110000001111) == 0b010000001110:
+                # bits[1:0] == 0b10: 'pgd_entry' is a section or a supersection descriptor
+                # AP == b01, C == 1, B == 1
                 valid_kernel_entries += 1
+        #debug.debug("Valid kernel entrie: {0}".format(valid_kernel_entries))
         valid_kernel_entries_ratio = 1.0 * valid_kernel_entries / min(as_size, 896)  # FIXME 896?
         if valid_kernel_entries_ratio > VALID_KERNEL_ENTRIES_THRESHOLD:
             debug.debug("Found {0} valid kernel entries in a PGD table at physical address {1:#x}. "
                         "Address space size: {2} MB.".format(valid_kernel_entries,
                                                              pgd_addr,
                                                              as_size))
+            return True
+        return False
+
+    def _is_valid_pgd_user_space(self, pgd_addr):
+        """Checks if user space entries in PGD table are valid.
+
+        Linux kernel doesn't use fine page tables to map memory, so there
+        shouldn't be any fine page table descriptor in a PGD table.
+
+        """
+        pgd_page = self.obj_vm.read(pgd_addr, ARM_PGD_SIZE)
+        #define TASK_SIZE  (UL(CONFIG_PAGE_OFFSET) - UL(0x01000000))
+        user_entries = ARM_PGD_ENTRIES / 4 * 3 - 16  # the last 16M is kernel module space
+        for entry_num in xrange(user_entries):
+            entry_offset = entry_num * ARM_PGD_ENTRY_SIZE
+            (pgd_entry, ) = unpack('<I', pgd_page[entry_offset:entry_offset + ARM_PGD_ENTRY_SIZE])
+            # TODO: domain user (1)
+            if (pgd_entry & 0b11) == 0b11:  # reserved
+                debug.debug("Found incorrect page table descriptor (entry #{0}) in a PGD table "
+                            "at physical address {1:#x}.".format(entry_num, pgd_addr))
+                return False
+        return True
+
+    def _is_valid_pgd(self, pgd_addr):
+        """Checks if PGD table starting at pgd_addr is valid."""
+        if self._is_valid_pgd_kernel_space(pgd_addr) and self._is_valid_pgd_user_space(pgd_addr):
+            debug.debug("Found a valid PGD table at physical address {0:#x}.".format(pgd_addr))
             return True
         return False
 
