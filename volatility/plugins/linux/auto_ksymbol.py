@@ -31,11 +31,16 @@ class linux_auto_ksymbol(linux_auto.AbstractLinuxAutoCommand):
         # Locate the physical offset of the ksymtab_strings section
         for match in re.finditer('init_task\0', self.kernel_image):
             offset = match.start()
-            if re.match(r'[0-9a-z_]', self.kernel_image[offset - 1:offset]):
+            symbol_char = re.compile(r'[0-9a-z_]')
+            if symbol_char.match(self.kernel_image[offset - 1:offset]):
                 # 'init_task' is a substring of another symbol like 'xxx_init_task'
                 continue
-            # TODO: Choose the right one, not the first. Find the beginning
-            # of the ksymtab_strings section
+            # TODO: Choose the right one, not the first.
+            # Find the beginning of the ksymtab_strings section
+            char = self.kernel_image[offset]
+            while offset > 0 and (symbol_char.match(char) or char == '\x00'):
+                offset -= 1
+                char = self.kernel_image[offset]
             debug.debug("Found the physical offset of the ksymtab_strings "
                         "section: {0:#010x}".format(offset))
             self.ksymtab_strings_offset = offset
