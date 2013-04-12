@@ -126,6 +126,7 @@ class VolatilityDTBARM(obj.VolatilityMagic):
                     debug.debug("Located a DTB at physical address {0:#x}".format(addr))
                     yield addr
 
+
 class LinuxAutoOverlay(obj.ProfileModification):
     conditions = {'os': lambda x: x == 'linux'}
     before = ['BasicObjectClasses']
