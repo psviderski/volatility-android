@@ -4,6 +4,9 @@ from volatility.plugins.linux import common as linux_common
 class AbstractLinuxAutoCommand(linux_common.AbstractLinuxCommand):
     """An abstract class that need to be inherited by all linux auto commands."""
 
+    def __init__(self, *args, **kwargs):
+        linux_common.AbstractLinuxCommand.__init__(self, *args, **kwargs)
+
     @staticmethod
     def is_valid_profile(profile):
         """Returns True if the plugin is valid for the current profile."""
