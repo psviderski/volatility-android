@@ -1,6 +1,7 @@
+from struct import unpack
 import volatility.debug as debug
 import volatility.obj as obj
-from struct import unpack
+from volatility.plugins.linux.auto_ksymbol import linux_auto_ksymbol
 
 
 ARM_PGD_SIZE = 0x4000  # 16 KB
@@ -147,6 +148,37 @@ class LinuxAutoObjectClasses(obj.ProfileModification):
         else:  # TODO: implement other architectures (x86, x86_64)
             return
         profile.object_classes.update({
+            'task_struct': task_struct,
             'VolatilityDTB': VolatilityDTB,
             'VolatilityLinuxAutoARMValidAS': VolatilityLinuxAutoARMValidAS,
         })
+
+
+class task_struct(obj.CType):
+    offsets_initialized = False
+    vtypes = {
+        'task_struct': [None, {
+            'comm': [None, ['String', dict(length=16)]],
+        }],
+    }
+
+    @classmethod
+    def _init_offset_comm(cls, vm):
+        ksymbol_command = linux_auto_ksymbol(vm.get_config())
+        init_task_addr = ksymbol_command.get_symbol('init_task')
+        # TODO: init 'comm'
+        init_task_data =vm.read(init_task_addr, 0x1000)
+        comm_offset = init_task_data.find('swapper')
+        if comm_offset != -1:
+            debug.debug("Found 'task_struct->comm' offset: {0}".format(comm_offset))
+            cls.vtypes['task_struct'][1]['comm'][0] = comm_offset
+        else:
+            debug.debug("Can't find 'task_struct->comm' offset".format(comm_offset))
+
+    # TODO: Think about a better way to lazy initialize offsets.
+    @classmethod
+    def init_offsets(cls, vm):
+        if not cls.offsets_initialized:
+            cls._init_offset_comm(vm)
+            vm.profile.add_types(cls.vtypes)
+            cls.offsets_initialized = True
