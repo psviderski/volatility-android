@@ -16,6 +16,8 @@ class linux_auto_pslist(linux_auto.AbstractLinuxAutoCommand):
         init_task_addr = ksymbol_command.get_symbol('init_task')
         init_task = obj.Object('task_struct', offset=init_task_addr, vm=self.addr_space)
         yield init_task
+        for task in init_task.tasks:
+            yield task
 
     def render_text(self, outfd, data):
         self.table_header(outfd, [("Offset", "[addrpad]"),

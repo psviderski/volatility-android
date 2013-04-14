@@ -10,6 +10,12 @@ ARM_PGD_ENTRY_SIZE = 4
 # Entry offsets
 ARM_PGD_DOMAIN_OFFSET = 5
 
+linux_auto_vtypes = {
+    'list_head': [8, {
+        'next': [0, ['pointer', ['list_head']]],
+        'prev': [4, ['pointer', ['list_head']]]
+    }],
+}
 linux_auto_overlay = {
     'VOLATILITY_MAGIC': [None, {
         'ArmAutoValidAS': [0x0, ['VolatilityLinuxAutoARMValidAS']],
@@ -128,6 +134,14 @@ class VolatilityDTBARM(obj.VolatilityMagic):
                     yield addr
 
 
+class LinuxAutoVTypes(obj.ProfileModification):
+    conditions = {'os': lambda x: x == 'linux'}
+    before = ['BasicObjectClasses']
+
+    def modification(self, profile):
+        profile.vtypes.update(linux_auto_vtypes)
+
+
 class LinuxAutoOverlay(obj.ProfileModification):
     conditions = {'os': lambda x: x == 'linux'}
     before = ['BasicObjectClasses']
@@ -158,6 +172,9 @@ class task_struct(obj.CType):
     offsets_initialized = False
     vtypes = {
         'task_struct': [None, {
+            # TODO: auto initialize 'tasks' and 'mm' offsets
+            'tasks': [448, ['list_head']],
+            'mm': [456, ['pointer', ['mm_struct']]],
             'comm': [None, ['String', dict(length=16)]],
         }],
     }
@@ -166,7 +183,6 @@ class task_struct(obj.CType):
     def _init_offset_comm(cls, vm):
         ksymbol_command = linux_auto_ksymbol(vm.get_config())
         init_task_addr = ksymbol_command.get_symbol('init_task')
-        # TODO: init 'comm'
         init_task_data =vm.read(init_task_addr, 0x1000)
         comm_offset = init_task_data.find('swapper')
         if comm_offset != -1:
