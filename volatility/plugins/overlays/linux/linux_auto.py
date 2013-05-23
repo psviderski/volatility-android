@@ -1,4 +1,5 @@
 from struct import unpack
+from copy import deepcopy
 import volatility.debug as debug
 import volatility.obj as obj
 from volatility.plugins.linux.auto_ksymbol import linux_auto_ksymbol
@@ -79,10 +80,14 @@ class VolatilityDTBARM(obj.VolatilityMagic):
             entry_offset = entry_num * ARM_PGD_ENTRY_SIZE
             (pgd_entry, ) = unpack('<I', pgd_page[entry_offset:entry_offset + ARM_PGD_ENTRY_SIZE])
             #if (pgd_entry & 0xfff) == 0b010001001110:  # TODO domain 0
-            if (pgd_entry & 0b110000001111) == 0b010000001110:
+            if (pgd_entry & 0b1001000110000001111) == 0b0000000010000001110:
                 # bits[1:0] == 0b10: 'pgd_entry' is a section or a supersection descriptor
                 # AP == b01, C == 1, B == 1
                 valid_kernel_entries += 1
+            elif (pgd_entry & 0b11) == 0b11:  # reserved
+                #debug.debug("Found incorrect (reserved) page table descriptor (entry #{0}) in a PGD table "
+                #            "at physical address {1:#x}.".format(entry_num, pgd_addr))
+                return False
         #debug.debug("Valid kernel entrie: {0}".format(valid_kernel_entries))
         valid_kernel_entries_ratio = 1.0 * valid_kernel_entries / min(as_size, 896)  # FIXME 896?
         if valid_kernel_entries_ratio > VALID_KERNEL_ENTRIES_THRESHOLD:
@@ -108,7 +113,8 @@ class VolatilityDTBARM(obj.VolatilityMagic):
             (pgd_entry, ) = unpack('<I', pgd_page[entry_offset:entry_offset + ARM_PGD_ENTRY_SIZE])
             # TODO: domain user (1)
             if (pgd_entry & 0b11) == 0b11:  # reserved
-                debug.debug("Found incorrect page table descriptor (entry #{0}) in a PGD table "
+            #if (pgd_entry & 0b10) == 0b10:  # reserved or section Warning: 1 miss on HTC and rPi
+                debug.debug("Found incorrect (reserved) page table descriptor (entry #{0}) in a PGD table "
                             "at physical address {1:#x}.".format(entry_num, pgd_addr))
                 return False
         return True
@@ -126,6 +132,9 @@ class VolatilityDTBARM(obj.VolatilityMagic):
         Uses signature method based on hardware structures.
 
         """
+        debug.debug("Available physical memory chunks")
+        for phys_addr, size in self.obj_vm.get_available_addresses():
+            debug.debug("{0:#x} -> {1}".format(phys_addr, size))
         for phys_addr, size in self.obj_vm.get_available_addresses():
             # PGD table is 16 KB aligned
             for addr in xrange(phys_addr, phys_addr + size, ARM_PGD_SIZE):
@@ -169,32 +178,83 @@ class LinuxAutoObjectClasses(obj.ProfileModification):
 
 
 class task_struct(obj.CType):
+    MAX_SIZE = 0x600
+
     offsets_initialized = False
     vtypes = {
         'task_struct': [None, {
-            # TODO: auto initialize 'tasks' and 'mm' offsets
-            'tasks': [448, ['list_head']],
-            'mm': [456, ['pointer', ['mm_struct']]],
-            'comm': [None, ['String', dict(length=16)]],
+            # TODO: auto initialize 'mm' offsets
+            #'tasks': [None, ['list_head']],
+            #'mm': [456, ['pointer', ['mm_struct']]],
+            #'mm': [None, ['pointer', ['mm_struct']]],
+            #'comm': [None, ['String', dict(length=16)]],
         }],
     }
+    vm = None
 
     @classmethod
-    def _init_offset_comm(cls, vm):
-        ksymbol_command = linux_auto_ksymbol(vm.get_config())
-        init_task_addr = ksymbol_command.get_symbol('init_task')
-        init_task_data =vm.read(init_task_addr, 0x1000)
-        comm_offset = init_task_data.find('swapper')
+    def is_offset_defined(cls, memname):
+        members = cls.vtypes['task_struct'][1]
+        return memname in members and members[memname][0] is not None
+
+    @classmethod
+    def _update_profile(cls):
+        """Add defined vtypes to the profile"""
+        vtypes = deepcopy(cls.vtypes)
+        for member_name, member_vtype in vtypes['task_struct'][1].items():
+            if member_vtype[0] is None:
+                del vtypes['task_struct'][1][member_name]
+        cls.vm.profile.add_types(vtypes)
+
+    @classmethod
+    def _init_offset_comm(cls):
+        comm_vtype = [None, ['String', dict(length=16)]]
+        ksymbol_command = linux_auto_ksymbol(cls.vm.get_config())
+        swapper_task_addr = ksymbol_command.get_symbol('init_task')
+        swapper_task_data = cls.vm.read(swapper_task_addr, cls.MAX_SIZE)
+        comm_offset = swapper_task_data.find('swapper')
         if comm_offset != -1:
             debug.debug("Found 'task_struct->comm' offset: {0}".format(comm_offset))
-            cls.vtypes['task_struct'][1]['comm'][0] = comm_offset
+            comm_vtype[0] = comm_offset
+            cls.vtypes['task_struct'][1]['comm'] = comm_vtype
+            cls._update_profile()
         else:
-            debug.debug("Can't find 'task_struct->comm' offset".format(comm_offset))
+            debug.debug("Can't find 'task_struct->comm' offset")
+
+    @classmethod
+    def _init_offset_tasks(cls):
+        if not cls.is_offset_defined('comm'):
+            return
+        tasks_vtype = [None, ['list_head']]
+        ksymbol_command = linux_auto_ksymbol(cls.vm.get_config())
+        swapper_task_addr = ksymbol_command.get_symbol('init_task')
+        for tasks_offset in xrange(0, cls.MAX_SIZE, 4):
+            tasks_vtype[0] = tasks_offset
+            cls.vtypes['task_struct'][1]['tasks'] = tasks_vtype
+            cls._update_profile()
+            swapper_task = obj.Object('task_struct', offset=swapper_task_addr, vm=cls.vm)
+            # Check first two tasks, they should be called 'init' and 'kthreadd'
+            tasks_iterator = iter(swapper_task.tasks)
+            try:
+                init_task = tasks_iterator.next()
+                if str(init_task.comm) == 'init':
+                    kthreadd_task = tasks_iterator.next()
+                    if str(kthreadd_task.comm) == 'kthreadd':
+                        debug.debug("Found 'task_struct->tasks' offset: {0}".format(tasks_offset))
+                        return
+            except StopIteration:
+                pass
+        debug.debug("Can't find 'task_struct->tasks' offset")
+        # Reset not found 'tasks' offset
+        cls.vtypes['task_struct'][1]['tasks'][0] = None
+        cls._update_profile()
 
     # TODO: Think about a better way to lazy initialize offsets.
     @classmethod
     def init_offsets(cls, vm):
+        cls.vm = vm
         if not cls.offsets_initialized:
-            cls._init_offset_comm(vm)
-            vm.profile.add_types(cls.vtypes)
+            vm.profile.add_types(cls.vtypes)  # Causes warnings: not defined offsets
+            cls._init_offset_comm()
+            cls._init_offset_tasks()
             cls.offsets_initialized = True

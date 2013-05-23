@@ -61,6 +61,7 @@ class linux_auto_ksymbol(linux_auto.AbstractLinuxAutoCommand):
                         "'{0}': {1:#010x}".format(name, symbol_str_offset))
             symbol_str_vaddr = symbol_str_offset + self.page_offset
             symbol_str_vaddr_little = pack('<L', symbol_str_vaddr)
+            # TODO: save ksymtab_offset in the object variable
             ksymtab_offset = max(0, symbol_str_offset - KSYMTAB_MAX_SIZE) >> 2 << 2  # align to x4
             ksymtab_data = self.kernel_image[ksymtab_offset:ksymtab_offset + KSYMTAB_MAX_SIZE]
             for match in re.finditer(symbol_str_vaddr_little.encode('hex'), ksymtab_data.encode('hex')):
