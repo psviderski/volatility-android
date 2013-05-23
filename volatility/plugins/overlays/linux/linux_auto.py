@@ -184,10 +184,9 @@ class task_struct(obj.CType):
     vtypes = {
         'task_struct': [None, {
             # TODO: auto initialize 'mm' offsets
-            #'tasks': [None, ['list_head']],
-            #'mm': [456, ['pointer', ['mm_struct']]],
-            #'mm': [None, ['pointer', ['mm_struct']]],
-            #'comm': [None, ['String', dict(length=16)]],
+            'tasks': [None, ['list_head']],
+            'mm': [None, ['pointer', ['mm_struct']]],
+            'comm': [None, ['String', dict(length=16)]],
         }],
     }
     vm = None
@@ -208,15 +207,13 @@ class task_struct(obj.CType):
 
     @classmethod
     def _init_offset_comm(cls):
-        comm_vtype = [None, ['String', dict(length=16)]]
         ksymbol_command = linux_auto_ksymbol(cls.vm.get_config())
         swapper_task_addr = ksymbol_command.get_symbol('init_task')
         swapper_task_data = cls.vm.read(swapper_task_addr, cls.MAX_SIZE)
         comm_offset = swapper_task_data.find('swapper')
         if comm_offset != -1:
             debug.debug("Found 'task_struct->comm' offset: {0}".format(comm_offset))
-            comm_vtype[0] = comm_offset
-            cls.vtypes['task_struct'][1]['comm'] = comm_vtype
+            cls.vtypes['task_struct'][1]['comm'][0] = comm_offset
             cls._update_profile()
         else:
             debug.debug("Can't find 'task_struct->comm' offset")
@@ -225,12 +222,10 @@ class task_struct(obj.CType):
     def _init_offset_tasks(cls):
         if not cls.is_offset_defined('comm'):
             return
-        tasks_vtype = [None, ['list_head']]
         ksymbol_command = linux_auto_ksymbol(cls.vm.get_config())
         swapper_task_addr = ksymbol_command.get_symbol('init_task')
         for tasks_offset in xrange(0, cls.MAX_SIZE, 4):
-            tasks_vtype[0] = tasks_offset
-            cls.vtypes['task_struct'][1]['tasks'] = tasks_vtype
+            cls.vtypes['task_struct'][1]['tasks'][0] = tasks_offset
             cls._update_profile()
             swapper_task = obj.Object('task_struct', offset=swapper_task_addr, vm=cls.vm)
             # Check first two tasks, they should be called 'init' and 'kthreadd'
