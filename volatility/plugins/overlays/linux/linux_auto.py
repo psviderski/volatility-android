@@ -177,13 +177,26 @@ class LinuxAutoObjectClasses(obj.ProfileModification):
         })
 
 
-class task_struct(obj.CType):
+class AutoCType(obj.CType):
+    vtypes = {}
+    vm = None
+
+    @classmethod
+    def _update_profile(cls):
+        """Add defined vtypes to the profile"""
+        vtypes = deepcopy(cls.vtypes)
+        for member_name, member_vtype in vtypes['task_struct'][1].items():
+            if member_vtype[0] is None:
+                del vtypes['task_struct'][1][member_name]
+        cls.vm.profile.add_types(vtypes)
+
+
+class task_struct(AutoCType):
     MAX_SIZE = 0x600
 
-    offsets_initialized = False
+    initialized = False
     vtypes = {
         'task_struct': [None, {
-            # TODO: auto initialize 'mm' offsets
             'tasks': [None, ['list_head']],
             'mm': [None, ['pointer', ['mm_struct']]],
             'comm': [None, ['String', dict(length=16)]],
@@ -195,15 +208,6 @@ class task_struct(obj.CType):
     def is_offset_defined(cls, memname):
         members = cls.vtypes['task_struct'][1]
         return memname in members and members[memname][0] is not None
-
-    @classmethod
-    def _update_profile(cls):
-        """Add defined vtypes to the profile"""
-        vtypes = deepcopy(cls.vtypes)
-        for member_name, member_vtype in vtypes['task_struct'][1].items():
-            if member_vtype[0] is None:
-                del vtypes['task_struct'][1][member_name]
-        cls.vm.profile.add_types(vtypes)
 
     @classmethod
     def _init_offset_comm(cls):
@@ -244,12 +248,99 @@ class task_struct(obj.CType):
         cls.vtypes['task_struct'][1]['tasks'][0] = None
         cls._update_profile()
 
+    @classmethod
+    def _init_offset_mm(cls):
+        """Brute-forces the offset of 'mm_struct *mm' below the found 'list_head tasks' structure."""
+        if not cls.is_offset_defined('tasks'):
+            return
+        ksymbol_command = linux_auto_ksymbol(cls.vm.get_config())
+        swapper_task_addr = ksymbol_command.get_symbol('init_task')
+        swapper_task = obj.Object('task_struct', offset=swapper_task_addr, vm=cls.vm)
+        tasks_iterator = iter(swapper_task.tasks)
+        try:
+            init_task = tasks_iterator.next()
+            assert str(init_task.comm) == 'init'
+        except StopIteration:
+            debug.debug("Can't get the next task after 'swapper' in tasks list")
+            return
+        # Start brute-force from the bottom of 'list_head tasks' structure
+        mm_offset_start = cls.vtypes['task_struct'][1]['tasks'][0] + swapper_task.tasks.size()
+        for mm_offset in xrange(mm_offset_start, mm_offset_start + 0x40, 4):
+            mm_ptr = obj.Object('Pointer', offset=swapper_task.obj_offset + mm_offset, vm=cls.vm)
+            active_mm_ptr = obj.Object('Pointer', offset=swapper_task.obj_offset + mm_offset + 4, vm=cls.vm)
+            if not (mm_ptr.v() == active_mm_ptr.v() == 0):
+                continue
+            # Check 'mm' and 'active_mm' pointers in the 'task_struct' structure  of 'init' process
+            mm_ptr = obj.Object('Pointer', offset=init_task.obj_offset + mm_offset, vm=cls.vm)
+            active_mm_ptr = obj.Object('Pointer', offset=init_task.obj_offset + mm_offset + 4, vm=cls.vm)
+            if mm_ptr.v() != active_mm_ptr.v() or mm_ptr.v() < 0xc0000000 or not mm_ptr:
+                continue
+            # Check if the first member of 'mm_struct' points to 'vm_area_struct'
+            mmap_ptr = obj.Object('Pointer', offset=mm_ptr.dereference().obj_offset, vm=cls.vm)
+            mmap_struct = mmap_ptr.dereference()
+            if not mmap_struct:
+                continue
+            # Check if there is a member of 'vm_area_struct' structure that points back to 'mm_struct'
+            #
+            # Before kernel versions 3.8:
+            #     struct vm_area_struct {
+            #         struct mm_struct * vm_mm;  <---
+            #         unsigned long vm_start;
+            #         unsigned long vm_end;
+            #         ...
+            #     }
+            # Since kernel versions 3.8:
+            #     struct vm_area_struct {
+            #         unsigned long vm_start;
+            #         unsigned long vm_end;
+            #         ...
+            #         struct mm_struct * vm_mm;  <---
+            #     }
+            is_vm_mm_found = False
+            for vm_mm_offset in xrange(0, 0x64, 4):
+                vm_mm = obj.Object('Pointer', offset=mmap_struct.obj_offset + vm_mm_offset, vm=cls.vm)
+                if vm_mm.v() == mm_ptr.v():
+                    is_vm_mm_found = True
+                    break
+            if not is_vm_mm_found:
+                continue
+            cls.vtypes['task_struct'][1]['mm'][0] = mm_offset
+            cls._update_profile()
+            # Init offsets of 'mm_struct' structure
+            mm_struct.init_offsets(cls.vm)
+            debug.debug("Found 'task_struct->mm' offset: {0}".format(mm_offset))
+            return
+        debug.debug("Can't find 'task_struct->mm' offset")
+
     # TODO: Think about a better way to lazy initialize offsets.
     @classmethod
     def init_offsets(cls, vm):
-        cls.vm = vm
-        if not cls.offsets_initialized:
-            vm.profile.add_types(cls.vtypes)  # Causes warnings: not defined offsets
+        if not cls.initialized:
+            cls.vm = vm
             cls._init_offset_comm()
             cls._init_offset_tasks()
-            cls.offsets_initialized = True
+            cls._init_offset_mm()
+            print "~~~~~~~", cls.vtypes
+            cls.initialized = True
+
+
+class mm_struct(AutoCType):
+    initialized = False
+    vtypes = {
+        'mm_struct': [None, {
+            # TODO: auto initialize 'pgd' offset
+            'pgd': [0, ['unsigned int']],
+        }],
+    }
+    vm = None
+
+    @classmethod
+    def _init_offset_pgd(cls):
+        pass
+
+    @classmethod
+    def init_offsets(cls, vm):
+        if not cls.initialized:
+            cls.vm = vm
+            cls._init_offset_pgd()
+            cls.initialized = True
