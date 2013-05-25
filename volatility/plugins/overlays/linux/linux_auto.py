@@ -172,6 +172,7 @@ class LinuxAutoObjectClasses(obj.ProfileModification):
             return
         profile.object_classes.update({
             'task_struct': task_struct,
+            'mm_struct': mm_struct,
             'VolatilityDTB': VolatilityDTB,
             'VolatilityLinuxAutoARMValidAS': VolatilityLinuxAutoARMValidAS,
         })
@@ -185,9 +186,10 @@ class AutoCType(obj.CType):
     def _update_profile(cls):
         """Add defined vtypes to the profile"""
         vtypes = deepcopy(cls.vtypes)
-        for member_name, member_vtype in vtypes['task_struct'][1].items():
+        struct_name = vtypes.iterkeys().next()
+        for member_name, member_vtype in vtypes[struct_name][1].items():
             if member_vtype[0] is None:
-                del vtypes['task_struct'][1][member_name]
+                del vtypes[struct_name][1][member_name]
         cls.vm.profile.add_types(vtypes)
 
 
@@ -259,7 +261,6 @@ class task_struct(AutoCType):
         tasks_iterator = iter(swapper_task.tasks)
         try:
             init_task = tasks_iterator.next()
-            assert str(init_task.comm) == 'init'
         except StopIteration:
             debug.debug("Can't get the next task after 'swapper' in tasks list")
             return
@@ -270,7 +271,7 @@ class task_struct(AutoCType):
             active_mm_ptr = obj.Object('Pointer', offset=swapper_task.obj_offset + mm_offset + 4, vm=cls.vm)
             if not (mm_ptr.v() == active_mm_ptr.v() == 0):
                 continue
-            # Check 'mm' and 'active_mm' pointers in the 'task_struct' structure  of 'init' process
+            # Check 'mm' and 'active_mm' pointers in the 'task_struct' structure of 'init' process
             mm_ptr = obj.Object('Pointer', offset=init_task.obj_offset + mm_offset, vm=cls.vm)
             active_mm_ptr = obj.Object('Pointer', offset=init_task.obj_offset + mm_offset + 4, vm=cls.vm)
             if mm_ptr.v() != active_mm_ptr.v() or mm_ptr.v() < 0xc0000000 or not mm_ptr:
@@ -306,9 +307,9 @@ class task_struct(AutoCType):
                 continue
             cls.vtypes['task_struct'][1]['mm'][0] = mm_offset
             cls._update_profile()
+            debug.debug("Found 'task_struct->mm' offset: {0}".format(mm_offset))
             # Init offsets of 'mm_struct' structure
             mm_struct.init_offsets(cls.vm)
-            debug.debug("Found 'task_struct->mm' offset: {0}".format(mm_offset))
             return
         debug.debug("Can't find 'task_struct->mm' offset")
 
@@ -320,7 +321,6 @@ class task_struct(AutoCType):
             cls._init_offset_comm()
             cls._init_offset_tasks()
             cls._init_offset_mm()
-            print "~~~~~~~", cls.vtypes
             cls.initialized = True
 
 
@@ -328,15 +328,32 @@ class mm_struct(AutoCType):
     initialized = False
     vtypes = {
         'mm_struct': [None, {
-            # TODO: auto initialize 'pgd' offset
-            'pgd': [0, ['unsigned int']],
+            'pgd': [None, ['unsigned int']],
         }],
     }
     vm = None
 
     @classmethod
     def _init_offset_pgd(cls):
-        pass
+        if not task_struct.is_offset_defined('mm'):
+            return
+        ksymbol_command = linux_auto_ksymbol(cls.vm.get_config())
+        swapper_task_addr = ksymbol_command.get_symbol('init_task')
+        swapper_task = obj.Object('task_struct', offset=swapper_task_addr, vm=cls.vm)
+        init_task = iter(swapper_task.tasks).next()
+        init_task_mm = init_task.mm.dereference()
+        for pgd_offset in xrange(0, 0x100, 4):
+            pgd = obj.Object('Pointer', offset=init_task_mm.obj_offset + pgd_offset, vm=cls.vm)
+            if not pgd:
+                continue
+            dtb = cls.vm.vtop(pgd.v())
+            init_task_as = cls.vm.__class__(cls.vm.base, cls.vm.get_config(), dtb=dtb)
+            if init_task_as.vtop(pgd.v()) == dtb:
+                cls.vtypes['mm_struct'][1]['pgd'][0] = pgd_offset
+                cls._update_profile()
+                debug.debug("Found 'mm_struct->pgd' offset: {0}".format(pgd_offset))
+                return
+        debug.debug("Can't find 'mm_struct->pgd' offset")
 
     @classmethod
     def init_offsets(cls, vm):
