@@ -134,7 +134,7 @@ class VolatilityDTBARM(obj.VolatilityMagic):
         """
         debug.debug("Available physical memory chunks")
         for phys_addr, size in self.obj_vm.get_available_addresses():
-            debug.debug("{0:#x} -> {1}".format(phys_addr, size))
+            debug.debug("{0:#x}-{1:#x} : {2} bytes".format(phys_addr, phys_addr + size - 1, size))
         for phys_addr, size in self.obj_vm.get_available_addresses():
             # PGD table is 16 KB aligned
             for addr in xrange(phys_addr, phys_addr + size, ARM_PGD_SIZE):
@@ -192,6 +192,11 @@ class AutoCType(obj.CType):
                 del vtypes[struct_name][1][member_name]
         cls.vm.profile.add_types(vtypes)
 
+    @classmethod
+    def is_offset_defined(cls, memname):
+        members = cls.vtypes[cls.__name__][1]
+        return memname in members and members[memname][0] is not None
+
 
 class task_struct(AutoCType):
     MAX_SIZE = 0x600
@@ -207,14 +212,11 @@ class task_struct(AutoCType):
     vm = None
 
     @classmethod
-    def is_offset_defined(cls, memname):
-        members = cls.vtypes['task_struct'][1]
-        return memname in members and members[memname][0] is not None
-
-    @classmethod
     def _init_offset_comm(cls):
         ksymbol_command = linux_auto_ksymbol(cls.vm.get_config())
         swapper_task_addr = ksymbol_command.get_symbol('init_task')
+        if swapper_task_addr is None:
+            return
         swapper_task_data = cls.vm.read(swapper_task_addr, cls.MAX_SIZE)
         comm_offset = swapper_task_data.find('swapper')
         if comm_offset != -1:
