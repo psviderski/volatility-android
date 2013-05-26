@@ -2,6 +2,8 @@ import os
 from struct import pack
 from volatility import debug, utils
 from volatility.plugins.linux.auto_dtblist import linux_auto_dtblist
+from volatility.plugins.linux.auto_pslist import linux_auto_pslist
+from volatility.plugins.overlays.linux.linux_auto import task_struct
 
 
 class linux_auto_dump_map(linux_auto_dtblist):
@@ -19,6 +21,16 @@ class linux_auto_dump_map(linux_auto_dtblist):
                                 help="Output file to write a dump of virtual address space to")
         self._config.add_option('DUMP-DIR', short_option='D', default = None,
                                 help = "Directory to write the dump files to")
+        self.process_names = None
+
+    def _init_process_names(self):
+        self.process_names = {}
+        pslist_command = linux_auto_pslist(self._config)
+        for task in pslist_command.calculate():
+            if not isinstance(task, task_struct):
+                break
+            if hasattr(task.mm, 'pgd') and task.mm.pgd:
+                self.process_names[task.obj_vm.vtop(task.mm.pgd)] = str(task.comm)
 
     def _parse_address(self, addr):
         if addr[:2].lower() == '0x':  # hexadecimal
@@ -31,7 +43,9 @@ class linux_auto_dump_map(linux_auto_dtblist):
 
     def _process_name(self, dtb):
         """Returns the name of a process associated with the given dtb."""
-        return "DTB_{0:#010x}".format(dtb)
+        if self.process_names is None:
+            self._init_process_names()
+        return "{0}_{1:#010x}".format(self.process_names.get(dtb, 'DTB'), dtb)
 
     def _process_dump_filepath(self, dtb):
         dump_dir = self._config.DUMP_DIR
@@ -90,7 +104,8 @@ class linux_auto_dump_map(linux_auto_dtblist):
                         " or a dump directory (use option --dump-dir).")
         if dump_dir and not os.path.isdir(dump_dir):
             debug.error("'{0}' is not a directory.".format(self._config.DUMP_DIR))
-        self.table_header(outfd, [("DTB", "[addrpad]"),
+        self.table_header(outfd, [("Name", "26"),
+                                  ("DTB", "[addrpad]"),
                                   ("Start", "[addrpad]"),
                                   ("End", "[addrpad]")])
         vaddr_start = None
@@ -100,10 +115,11 @@ class linux_auto_dump_map(linux_auto_dtblist):
         dump_fd = open(dump_file, 'wb') if not dump_dir else None
         index_fd = IndexFile('{0}.index'.format(dump_file)) if not dump_dir else None
         for process_dtb, vaddr, page in data:
+            process_name = self._process_name(process_dtb)
             if process_dtb != cur_process_dtb:
                 # Write the last range of virtual addresses of the previous process
                 if vaddr_start is not None:
-                    self.table_row(outfd, cur_process_dtb, vaddr_start, vaddr_end)
+                    self.table_row(outfd, process_name, cur_process_dtb, vaddr_start, vaddr_end)
                     index_fd.write_range(vaddr_start, vaddr_end)
                 vaddr_start = None
                 vaddr_end = None
@@ -122,14 +138,14 @@ class linux_auto_dump_map(linux_auto_dtblist):
                 vaddr_end += len(page)
             else:
                 if vaddr_start is not None:
-                    self.table_row(outfd, process_dtb, vaddr_start, vaddr_end)
+                    self.table_row(outfd, process_name, process_dtb, vaddr_start, vaddr_end)
                     index_fd.write_range(vaddr_start, vaddr_end)
                 vaddr_start = vaddr
                 vaddr_end = vaddr + len(page)
             dump_fd.write(page)
         # Write the last range of virtual addresses
         if vaddr_start is not None:
-            self.table_row(outfd, process_dtb, vaddr_start, vaddr_end)
+            self.table_row(outfd, process_name, process_dtb, vaddr_start, vaddr_end)
             index_fd.write_range(vaddr_start, vaddr_end)
         if dump_fd:
             dump_fd.close()
