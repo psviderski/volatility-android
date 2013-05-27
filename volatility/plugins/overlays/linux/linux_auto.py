@@ -271,7 +271,7 @@ class task_struct(AutoCType):
         for mm_offset in xrange(mm_offset_start, mm_offset_start + 0x40, 4):
             mm_ptr = obj.Object('Pointer', offset=swapper_task.obj_offset + mm_offset, vm=cls.vm)
             active_mm_ptr = obj.Object('Pointer', offset=swapper_task.obj_offset + mm_offset + 4, vm=cls.vm)
-            if not (mm_ptr.v() == active_mm_ptr.v() == 0):
+            if mm_ptr.v() != 0:  # 'mm' field for kernel threads is always NULL
                 continue
             # Check 'mm' and 'active_mm' pointers in the 'task_struct' structure of 'init' process
             mm_ptr = obj.Object('Pointer', offset=init_task.obj_offset + mm_offset, vm=cls.vm)
